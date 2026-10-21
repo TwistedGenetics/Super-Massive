@@ -33,6 +33,16 @@ jobs:
         env:
           HORIZON_STRICT: "1"
 
+      # microKORG 2 revfx units: max 24 KB RAM load size (platform/microkorg2/README.md).
+      - name: Check unit size (24 KB load limit)
+        run: |
+          for f in dist/*.mk2unit; do
+            mem=0
+            for h in $(readelf -lW "$f" | awk '$1=="LOAD"{print $6}'); do mem=$(( mem + h )); done
+            echo "::notice title=Unit size::$(basename "$f"): $mem bytes loaded (limit 24576)"
+            [ "$mem" -le 24576 ] || { echo "::error title=Unit too big::$(basename "$f") is $mem bytes, over the 24 KB limit"; exit 1; }
+          done
+
       - name: Check the tag matches the unit version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
