@@ -41,5 +41,5 @@ ULIBS += -lc
 # Macros
 #
 
-OPTIM = -O3
+OPTIM = -Os
 UDEFS = -DHORIZON_LOADMETER
