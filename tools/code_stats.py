@@ -38,12 +38,23 @@ def main(path):
     if not loops:
         print('no loop found')
         return 1
-    start, end = max(loops, key=lambda l: l[1] - l[0])
-    body = [i for i in insns if start <= i[0] <= end]
-    inner = [l for l in loops if l != (start, end) and start <= l[0] and l[1] <= end]
-    neon = sum(1 for _, op, a in body if op.startswith('v') and re.search(r'\b[qd]\d+', a))
-    vdiv = sum(1 for _, op, _a in body if op.startswith(('vdiv', 'vsqrt')))
-    calls = sorted({re.sub(r'^(?:0x)?[0-9a-f]+\s*', '', a).split(' @')[0] or a for _, op, a in body if op in ('bl', 'blx')})
+    def stats(lp):
+        start, end = lp
+        body = [i for i in insns if start <= i[0] <= end]
+        inner = [l for l in loops if l != lp and start <= l[0] and l[1] <= end]
+        neon = sum(1 for _, op, a in body if op.startswith('v') and re.search(r'\b[qd]\d+', a))
+        vdiv = sum(1 for _, op, _a in body if op.startswith(('vdiv', 'vsqrt')))
+        calls = sorted({re.sub(r'^(?:0x)?[0-9a-f]+\s*', '', a).split(' @')[0] or a
+                        for _, op, a in body if op in ('bl', 'blx')})
+        return body, inner, neon, vdiv, calls
+
+    # The sample loop is the smallest loop that does the bulk of the NEON work
+    # (larger "loops" can be layout artefacts spanning block-rate code too).
+    # Falls back to the largest loop for scalar builds.
+    cands = [(l, stats(l)) for l in set(loops)]
+    heavy = [c for c in cands if c[1][2] >= 60]
+    lp, (body, inner, neon, vdiv, calls) = (min(heavy, key=lambda c: c[0][1] - c[0][0]) if heavy
+                                            else max(cands, key=lambda c: c[0][1] - c[0][0]))
     print(f'sample loop: {len(body)} instructions (static), {len(inner)} inner loops, '
           f'{neon} NEON ops, {vdiv} divides, calls: {", ".join(calls) if calls else "none"}')
     return 0
