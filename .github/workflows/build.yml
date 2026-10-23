@@ -38,6 +38,9 @@ jobs:
           gcc=$(find .deps/mk2-toolchain -type f -name 'arm-unknown-linux-gnueabihf-gcc' -path '*/bin/*' | head -1)
           echo "::notice title=Toolchain::$("$gcc" --version | head -1)"
 
+      - name: Code stats (per-sample loop, Korg's gcc)
+        run: echo "::notice title=Sample loop::$(python3 tools/code_stats.py microkorg2/build/Horizon.list)"
+
       # microKORG 2 revfx units: max 24 KB RAM load size (platform/microkorg2/README.md).
       - name: Check unit size (24 KB load limit)
         run: |
