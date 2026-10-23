@@ -41,5 +41,5 @@ ULIBS += -lc
 # Macros
 #
 
-OPTIM = -O2
+OPTIM = -Os
 UDEFS =
