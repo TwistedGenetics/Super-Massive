@@ -76,9 +76,10 @@ Time is in ms for now. At tempo *T* bpm, a 1/4 note is 60000 / *T* ms (174 bpm: 
 
 Reverb units get **1 MB** of delay memory (`REVFX_MEMORY_SIZE_BYTES`) and **8 params**. Horizon uses exactly 1 MB: eight 1.28 s delay lines plus eight small diffuser buffers, stored as 16-bit integers (like Korg's own `breveR`). That's why Time tops out at 1250 ms; long tails come from feedback, not line length. See [NOTES.md](NOTES.md) for the verified SDK limits and design trade-offs.
 
-- **Desktop** (test harness): ~140–200 ns per sample, under 1 % of real time on the build machine.
-- **microKORG 2** (Cortex-A7): not measured on hardware yet; use **HZmeter**. Per sample it does 8 interpolated reads and writes, a 3-stage rotation network, 8 loop filters and soft clippers, 8 short allpasses and two LFOs. That's light for the A7; scattered memory access is the more likely limit.
-- Unit size: ~17 KB (limit 24 KB), measured with an ARMv7 test build.
+- **v1.0.1 is about 2.5–3× lighter than v1.0.0.** v1.0.0 could crackle when paired with a heavy user oscillator. The sample loop now runs the 8 delay lines as NEON vectors, with no divides and no library calls (details in [NOTES.md](NOTES.md)).
+- **Desktop** (test harness): ~655 instructions per sample (v1.0.0: ~1,740).
+- **microKORG 2** (Cortex-A7): not measured on hardware yet; use **HZmeter**. The oscillator and the effects share one CPU, so a heavy user oscillator with many voices plus Horizon can still run out of time. If it crackles, check HZmeter's % and the oscillator's own meter (if it has one), and try fewer voices.
+- Unit size: ~11 KB loaded (limit 24 KB); CI fails the build if it ever goes over.
 
 ## Building
 

@@ -65,12 +65,35 @@ loop saturator + DC blocker keep values bounded.
 
 ## CPU
 
-Per sample: 8 interpolated reads + 8 writes, an 8-point fast Walsh–Hadamard transform
-(24 add/sub), 8 one-pole HP (+8 LP in filtered modes), 8 soft-clips, two quadrature LFOs,
-8 short allpasses. Roughly 250–350 float ops/sample ≈ 12–17 M ops/s, a small fraction of
-the A7. **Not measured on hardware yet** — see "Testing on the synth" in the README.
-SDRAM access is the more likely bottleneck (16 scattered accesses/sample); if the unit
-glitches, the first lever is dropping filtered modes' LP or diffuser count.
+**v1.0.0 was too heavy.** On the synth it crackled when paired with a demanding user
+oscillator (stock oscillators were fine). A profile showed ~1,740 instructions per sample
+(desktop count, `-Os`), plus 8 floating-point divides per sample (the rational
+soft-clipper; VDIV is ~15 cycles on the A7 and not pipelined) — roughly 5x the original
+estimate. The cost was loop overhead (`-Os` doesn't unroll the 8-line loops), per-sample
+parameter smoothing, the butterfly network, the divides and the int16 clamps.
+
+**v1.0.1 rewrite of the sample loop** (same algorithm, same decay times/attacks):
+- The 8 lines are two 4-wide GCC vectors (`vector_size(16)`, as in Rollers' lean engine):
+  NEON on the microKORG 2, SSE on a desktop, so the tested code is the shipped code.
+- Permutation + 3-stage rotation are folded into one 8×8 matrix, rebuilt only when
+  DENSITY moves (per block). Checked against the butterfly version: max error 1.8e-7.
+- Division-free cubic saturator (Rollers' `softclip`), which bounds the loop at ±1.8, so
+  line writes need no clamp.
+- Gains, density, diffusion, mix and the mode crossfade update once per block
+  (mix and fade are linearly ramped per sample, so no zipper).
+- Read-index math 4-wide; input diffusers run L and R side by side (2-wide).
+
+| | v1.0.0 | v1.0.1 |
+|---|---|---|
+| Desktop instructions/sample (`-Os`, valgrind) | ~1,740 | ~655 |
+| FP divides/sample | 8 | 0 |
+| ARM loop (clang `-Os`, A7/NEON) | loops + 5 libm calls | ~550 straight-line instr, no calls |
+
+Expect roughly 2.5–3× less CPU on the synth. Output vs v1.0.0 matches to ~40–50 dB
+across modes (limited by int16 rounding noise and the different saturator curve); T60
+and attack measurements are unchanged. **Not yet measured on hardware: use HZmeter.**
+If it's still too heavy with a big oscillator patch, the next levers are fewer diffuser
+stages and fewer lines (a "lite" build).
 
 ## Algorithm summary
 
@@ -80,7 +103,7 @@ glitches, the first lever is dropping filtered modes' LP or diffuser count.
   Length changes glide (one-pole on read position) → tape-style pitch bends, no clicks.
 - Feedback matrix = a mode-specific **permutation** (echoes circulate intact, giving
   patterns/ping-pong/cascades) followed by three butterfly stages of **Givens rotations**
-  by θ. θ = 0 leaves the permutation alone; θ = π/4 is a full 8×8 Hadamard mix.
+  by θ (since v1.0.1 folded into one precomputed 8×8 matrix). θ = 0 leaves the permutation alone; θ = π/4 is a full 8×8 Hadamard mix.
   DENSITY sets θ. Every stage is orthogonal, so the matrix is energy-preserving at
   every DENSITY and density never changes the decay time.
   (First version linearly blended permutation and Hadamard. That's stable but loses
@@ -89,7 +112,7 @@ glitches, the first lever is dropping filtered modes' LP or diffuser count.
   same rate. FEEDBACK maps to per-pass gain as `fbMax · (1 − (1−k)^1.5)`.
 - int16 writes **truncate** toward zero. Rounding was tried: it lets tiny tails get
   stuck as ±1 LSB limit cycles that never reach −60 dB.
-- Soft saturation in the loop: FEEDBACK at 100 holds/sustains without blowing up.
+- Soft saturation in the loop (division-free cubic since v1.0.1): FEEDBACK at 100 holds/sustains without blowing up.
 - "Bloom" modes inject into the first lines of a cascade and listen mostly to the last,
   so sound builds up over several passes → slow swells; the swell length tracks TIME and
   FEEDBACK.
