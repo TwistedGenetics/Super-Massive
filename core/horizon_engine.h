@@ -22,6 +22,13 @@
 
 #include "horizon_modes.h"
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define HZ_NEON 1
+#elif defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 9)
+#define HZ_CONVERTVECTOR 1
+#endif
+
 namespace horizon {
 
 static constexpr int kLines = 8;
@@ -61,6 +68,36 @@ static HZ_INLINE hf4 softclip(hf4 x) {
   return x - 0.148148148f * x * x * x;
 }
 static HZ_INLINE float hsum(hf4 x) { return (x[0] + x[1]) + (x[2] + x[3]); }
+// Float <-> int conversions (truncate toward zero), 4 and 2 lanes at a time.
+// NEON intrinsics on the synth (Korg's gcc 6.5 has no __builtin_convertvector),
+// the generic builtin on newer desktop compilers, per lane otherwise.
+static HZ_INLINE hi4 toInt(hf4 x) {
+#if defined(HZ_NEON)
+  return (hi4)vcvtq_s32_f32((float32x4_t)x);
+#elif defined(HZ_CONVERTVECTOR)
+  return __builtin_convertvector(x, hi4);
+#else
+  return (hi4){(int)x[0], (int)x[1], (int)x[2], (int)x[3]};
+#endif
+}
+static HZ_INLINE hf4 toFloat(hi4 x) {
+#if defined(HZ_NEON)
+  return (hf4)vcvtq_f32_s32((int32x4_t)x);
+#elif defined(HZ_CONVERTVECTOR)
+  return __builtin_convertvector(x, hf4);
+#else
+  return (hf4){(float)x[0], (float)x[1], (float)x[2], (float)x[3]};
+#endif
+}
+static HZ_INLINE hi2 toInt2(hf2 x) {
+#if defined(HZ_NEON)
+  return (hi2)vcvt_s32_f32((float32x2_t)x);
+#elif defined(HZ_CONVERTVECTOR)
+  return __builtin_convertvector(x, hi2);
+#else
+  return (hi2){(int)x[0], (int)x[1]};
+#endif
+}
 static HZ_INLINE hf2 clamp2(hf2 x, float lo, float hi) {
   const hf2 l = (hf2){lo, lo}, h = (hf2){hi, hi};
   x = (x > hi) ? h : x;
@@ -320,47 +357,27 @@ class Engine {
 
   // Read 4 lines (base..base+3) at fractional delays d (samples), linear interp.
   HZ_INLINE hf4 readLines(hf4 d, int base) {
-    hf4 a, c;
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 9)
     // Index math 4-wide; only the 8 loads are scalar.
-    const hi4 di = __builtin_convertvector(d, hi4);
-    const hf4 fr = d - __builtin_convertvector(di, hf4);
+    const hi4 di = v4::toInt(d);
+    const hf4 fr = d - v4::toFloat(di);
     const hi4 L = (hi4){kLineLen, kLineLen, kLineLen, kLineLen};
     hi4 r0 = wLine_ - di;
     r0 += (r0 < 0) & L;  // comparison gives -1 (true) / 0 per lane
     hi4 r1 = r0 - 1;
     r1 += (r1 < 0) & L;
+    hf4 a, c;
     for (int j = 0; j < 4; ++j) {
       const int16_t *ln = line_[base + j];
       a[j] = (float)ln[r0[j]];
       c[j] = (float)ln[r1[j]];
     }
-#else
-    hf4 ip;
-    for (int j = 0; j < 4; ++j) {
-      const int dj = (int)d[j];
-      ip[j] = (float)dj;
-      int r0 = wLine_ - dj;
-      if (r0 < 0) r0 += kLineLen;
-      const int r1 = r0 > 0 ? r0 - 1 : kLineLen - 1;
-      const int16_t *ln = line_[base + j];
-      a[j] = (float)ln[r0];
-      c[j] = (float)ln[r1];
-    }
-    const hf4 fr = d - ip;
-#endif
     return (a + (c - a) * fr) * kInvQ;
   }
 
   // q is already scaled by kQ and bounded by the saturator (|q| < 29500).
-  // One vector float->int conversion where the compiler has it (GCC 9+, clang).
   HZ_INLINE void writeLines(hf4 q, int base) {
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 9)
-    const hi4 qi = __builtin_convertvector(q, hi4);
+    const hi4 qi = v4::toInt(q);
     for (int j = 0; j < 4; ++j) line_[base + j][wLine_] = (int16_t)qi[j];
-#else
-    for (int j = 0; j < 4; ++j) line_[base + j][wLine_] = (int16_t)(int)q[j];
-#endif
   }
 
   // Allpass stage k for both channels: left uses buffer k, right buffer k + 4.
@@ -369,15 +386,9 @@ class Engine {
     const hf2 z = (hf2){(float)bl[(wDiff_ - diffLen_[k]) & kDiffMask],
                         (float)br[(wDiff_ - diffLen_[k + 4]) & kDiffMask]} * kInvQ;
     const hf2 y = z - g * x;
-    const hf2 q = v4::clamp2((x + g * y) * kQ, -32768.f, 32767.f);
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 9)
-    const hi2 qi = __builtin_convertvector(q, hi2);
+    const hi2 qi = v4::toInt2(v4::clamp2((x + g * y) * kQ, -32768.f, 32767.f));
     bl[wDiff_] = (int16_t)qi[0];
     br[wDiff_] = (int16_t)qi[1];
-#else
-    bl[wDiff_] = (int16_t)(int)q[0];
-    br[wDiff_] = (int16_t)(int)q[1];
-#endif
     return y;
   }
 
