@@ -86,8 +86,16 @@ parameter smoothing, the butterfly network, the divides and the int16 clamps.
 | | v1.0.0 | v1.0.1 |
 |---|---|---|
 | Desktop instructions/sample (`-Os`, valgrind) | ~1,740 | ~655 |
-| FP divides/sample | 8 | 0 |
-| ARM loop (clang `-Os`, A7/NEON) | loops + 5 libm calls | ~550 straight-line instr, no calls |
+| **Synth build** (Korg's gcc 6.5, `-Os`), per-sample loop | 828 instr. wrapped around 21 inner loops (mostly ×8 per sample) | 735 instr. straight through, 4 tiny ×4 loops |
+| …divide instructions in it | 4 (inside the ×8 loops) | 0 |
+| …library calls in it | several | none |
+| …NEON instructions | 13 | 378 |
+
+The synth-build row comes from `tools/code_stats.py`, which CI runs on Korg's
+disassembly listing on every build (see the "Sample loop" note on each Actions run).
+Korg's toolchain is **gcc 6.5** (crosstool-NG 1.24.0), which lacks
+`__builtin_convertvector`, so float↔int conversions use NEON intrinsics directly.
+`-O2` was tried: the unit grew to 21.8 KB with no verifiable gain, so the build stays `-Os`.
 
 Expect roughly 2.5–3× less CPU on the synth. Output vs v1.0.0 matches to ~40–50 dB
 across modes (limited by int16 rounding noise and the different saturator curve); T60
