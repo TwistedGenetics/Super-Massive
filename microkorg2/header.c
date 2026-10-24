@@ -24,7 +24,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,
     .dev_id = 0x5477476EU,  // 'TwGn' (TwistedGenetics)
     .unit_id = HORIZON_UNIT_ID,
-    .version = 0x00010001U,  // 1.0.1
+    .version = 0x00010100U,  // 1.1.0
     .name = HORIZON_UNIT_NAME,
     .num_presets = 0,
     .num_params = 8,
@@ -32,7 +32,9 @@ const __unit_header unit_header_t unit_header = {
         // min, max, center, default, type, frac, frac mode, reserved, name
 
         // Page 1
-        {10, 1250, 0, 400, k_unit_param_type_msec, 0, 0, 0, {"Time"}},
+        // Time: -13..-1 = tempo-synced divisions (1/32 .. 1/2D), 0..1250 = ms.
+        // Shown as text by unit_get_param_str_value (core/horizon_sync.h).
+        {-13, 1250, 0, 400, k_unit_param_type_strings, 0, 0, 0, {"Time"}},
         {0, 100, 0, 70, k_unit_param_type_percent, 0, 0, 0, {"Feedback"}},
         {0, 100, 0, 60, k_unit_param_type_percent, 0, 0, 0, {"Warp"}},
 

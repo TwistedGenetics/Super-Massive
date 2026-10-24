@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../core/horizon_engine.h"
+#include "../core/horizon_sync.h"
 
 using namespace horizon;
 
@@ -339,7 +340,59 @@ static void runAll(const std::string &outDir) {
     CHECK(during < ref * 1.5f + 0.005f, "mode switch click (%.4f vs %.4f)", during, ref);
   }
 
-  // 6) CPU (desktop x86 — only a relative sanity check, NOT the A7 figure).
+  // 6) Tempo sync maths for the Time knob.
+  printf("\nTempo sync (Time knob):\n");
+  {
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.05f; };
+    // At 174 bpm: 1/4 = 344.83 ms, 1/8D = 258.62, 1/16 = 86.21, 1/2D = 1034.48
+    const float bpm = 174.f;
+    struct { const char *name; float ms; } want[] = {
+      {"1/4", 60000.f / 174.f}, {"1/8D", 0.75f * 60000.f / 174.f},
+      {"1/16", 0.25f * 60000.f / 174.f}, {"1/2D", 3.f * 60000.f / 174.f}, {"1/8T", 60000.f / 174.f / 3.f}};
+    for (auto &w : want) {
+      int v = 0;
+      for (int i = kTimeParamMin; i < 0; ++i) if (!strcmp(timeParamDiv(i)->name, w.name)) v = i;
+      const float ms = timeParamToMs(v, bpm);
+      printf("  %-5s @174 = %7.2f ms\n", w.name, ms);
+      CHECK(v < 0 && near(ms, w.ms), "%s at 174 bpm: %.2f ms, want %.2f", w.name, ms, w.ms);
+    }
+    // Too long for the 1.25 s lines: halved until it fits (1/2D at 120 = 1500 -> 750 ms).
+    CHECK(near(timeParamToMs(-1, 120.f), 750.f), "1/2D at 120 bpm should halve to 750 ms (got %.1f)", timeParamToMs(-1, 120.f));
+    CHECK(near(timeParamToMs(-1, 150.f), 1200.f), "1/2D at 150 bpm should be 1200 ms");
+    // Divisions get longer left->right; every synced time is in range at any tempo.
+    for (int t = 20; t <= 300; t += 7) {
+      for (int v = kTimeParamMin; v < 0; ++v) {
+        const float ms = timeParamToMs(v, (float)t);
+        CHECK(ms >= kMinTimeMs && ms <= kMaxTimeMs, "out of range: v=%d bpm=%d ms=%.1f", v, t, ms);
+      }
+      for (int v = kTimeParamMin; v < -2; ++v)
+        CHECK(kSyncDivs[v - kTimeParamMin].beats < kSyncDivs[v - kTimeParamMin + 1].beats, "division order");
+    }
+    // ms zone unchanged from v1.0 (saved patches keep their times); 0..9 play as 10 ms.
+    CHECK(timeParamToMs(400, 174.f) == 400.f && timeParamToMs(1250, 90.f) == 1250.f, "ms zone changed");
+    CHECK(timeParamToMs(0, 120.f) == kMinTimeMs && timeParamToMs(9, 120.f) == kMinTimeMs, "ms floor");
+    CHECK(timeParamDiv(kTimeParamMin) && !strcmp(timeParamDiv(kTimeParamMin)->name, "1/32") &&
+          !strcmp(timeParamDiv(-1)->name, "1/2D") && !timeParamDiv(0), "zone edges");
+    // A synced Orbit loop really repeats at the beat: impulse -> first repeat at 1/4 @ 174.
+    {
+      Settings s = defaults(kModeOrbit); s.timeMs = timeParamToMs(-5 /* 1/4 */, 174.f);
+      s.density = 0.f; s.mix = 1.f; s.mod = 0.f;
+      Engine e; fresh(e, s);
+      std::vector<float> imp((size_t)SR * 2 * 2, 0.f), o;
+      imp[0] = imp[1] = 1.f;
+      run(e, imp, o);
+      size_t at = 0; float pk = 0;
+      for (size_t i = (size_t)(SR * 0.05); i < (size_t)SR; ++i) {
+        const float a = std::fabs(o[2 * i]);
+        if (a > pk) { pk = a; at = i; }
+      }
+      const float gotMs = at * 1000.f / SR, wantMs = 60000.f / 174.f;
+      printf("  Orbit 1/4 @174: first repeat at %.1f ms (want %.1f)\n", gotMs, wantMs);
+      CHECK(std::fabs(gotMs - wantMs) < 0.5f, "synced repeat off the beat (%.1f ms, want %.1f)", gotMs, wantMs);
+    }
+  }
+
+  // 7) CPU (desktop x86 — only a relative sanity check, NOT the A7 figure).
   printf("\nCPU (this machine, -O2, per mode, 20 s of audio):\n");
   for (int m = 0; m < kNumModes; ++m) {
     Settings s = defaults(m);

@@ -172,6 +172,9 @@ class Engine {
     blend_ += (blendT_ - blend_) * bs;
     if (matDirty_ || fabsf(blend_ - matBlend_) > 1e-4f) buildMatrix();
     diffG_ += (diffGT_ - diffG_) * bs;
+    const float wetIn0 = diffMix_;
+    diffMix_ += (diffMixT_ - diffMix_) * bs;
+    const float wetInStep = (diffMix_ - wetIn0) / (float)frames;
 
     const float invFrames = 1.f / (float)frames;
     const float mixEnd = mix_ + (mixTarget_ - mix_) * bs;
@@ -208,18 +211,23 @@ class Engine {
     hf4 hp0 = hpZ_[0], hp1 = hpZ_[1], lp0 = lpZ_[0], lp1 = lpZ_[1];
     float s0 = lfoS_[0], c0 = lfoC_[0], s1 = lfoS_[1], c1 = lfoC_[1];
     float mix = mix_, fade = fade_;
+    float dmix = wetIn0;
 
     for (size_t n = 0; n < frames; ++n) {
       const float dryL = in[2 * n];
       const float dryR = in[2 * n + 1];
 
       // ---- Input diffusion (4 allpasses per side, L and R side by side) ----
-      hf2 dLR = (hf2){dryL, dryR} * inGain;
-      dLR = allpass2(0, dLR, g);
+      // The chain also delays the input (~30 ms x mode scale). Echo modes blend
+      // the undiffused input back in (dmix < 1) so echoes land on the beat.
+      const hf2 inLR = (hf2){dryL, dryR} * inGain;
+      hf2 dLR = allpass2(0, inLR, g);
       dLR = allpass2(1, dLR, g);
       dLR = allpass2(2, dLR, g);
       dLR = allpass2(3, dLR, g);
       wDiff_ = (wDiff_ + 1) & kDiffMask;
+      dLR = inLR + (dLR - inLR) * dmix;
+      dmix += wetInStep;
       const float dL = dLR[0], dR = dLR[1];
 
       // ---- Modulation: two quadrature LFOs -> 8 phases ----
@@ -496,6 +504,7 @@ class Engine {
 
     blendT_ = m.denseMin + density_ * (m.denseMax - m.denseMin);
     diffGT_ = m.diffMax * density_;
+    diffMixT_ = m.onBeat ? density_ : 1.f;
 
     // Modulation: depth rises with the knob; rate rises gently; depth backs off at high rate.
     const float rate = m.modRateHz * (0.5f + mod_);
@@ -540,6 +549,7 @@ class Engine {
     }
     blend_ = blendT_;
     diffG_ = diffGT_;
+    diffMix_ = diffMixT_;
     mix_ = mixTarget_;
     buildMatrix();
   }
@@ -574,6 +584,7 @@ class Engine {
   hf4 gainT_[2] = {}, gain_[2] = {};
   hf4 modDepth_[2] = {};
   float blendT_ = 0.f, blend_ = 0.f, diffGT_ = 0.f, diffG_ = 0.f, mix_ = 0.f;
+  float diffMixT_ = 1.f, diffMix_ = 1.f;  // share of diffused input (echo modes: Density)
   float glideCoef_ = 0.f, fadeOutStep_ = 0.f, fadeInStep_ = 0.f;
   float fade_ = 1.f, fadeTarget_ = 1.f;
   size_t lastFrames_ = 0;

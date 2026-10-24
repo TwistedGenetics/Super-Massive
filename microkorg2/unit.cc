@@ -18,6 +18,7 @@
 #include "runtime.h"
 #include "unit_revfx.h"
 #include "horizon_engine.h"
+#include "horizon_sync.h"
 #ifdef HORIZON_LOADMETER
 #include <stdio.h>
 #include <time.h>
@@ -43,6 +44,8 @@ static_assert(horizon::kMemBytes <= REVFX_MEMORY_SIZE_BYTES, "delay memory over 
 horizon::Engine s_engine;
 int16_t *s_mem = nullptr;
 int32_t s_params[kNumParams];
+float s_bpm = 120.f;      // until the synth sends its tempo
+char s_time_str[16];      // Time display text
 
 // Delay memory is cleared a slice per render call (never 1 MB in one go on the
 // audio thread). Until it's clean the unit passes audio through dry.
@@ -78,7 +81,7 @@ void startClear() {
 
 void applyParam(uint8_t id, int32_t v) {
   switch (id) {
-    case kParamTime:     s_engine.setTimeMs((float)v); break;
+    case kParamTime:     s_engine.setTimeMs(horizon::timeParamToMs((int)v, s_bpm)); break;
     case kParamFeedback: s_engine.setFeedback(v * 0.01f); break;
     case kParamWarp:     s_engine.setWarp(v * 0.01f); break;
     case kParamDensity:  s_engine.setDensity(v * 0.01f); break;
@@ -185,7 +188,30 @@ __attribute__((used)) int32_t unit_get_param_value(uint8_t id) {
   return id < kNumParams ? s_params[id] : 0;
 }
 
+// "430" + "|ms": Korg's convention for a value with a unit in the medium font
+// ("|" = medium, see AddCustomParameterUnit in the SDK's utils/mk2_utils.h).
+static const char *formatMs(int ms) {
+  char digits[8];
+  int n = 0;
+  if (ms <= 0) digits[n++] = '0';
+  while (ms > 0 && n < 7) {
+    digits[n++] = (char)('0' + ms % 10);
+    ms /= 10;
+  }
+  int k = 0;
+  while (n > 0) s_time_str[k++] = digits[--n];
+  s_time_str[k++] = '|';
+  s_time_str[k++] = 'm';
+  s_time_str[k++] = 's';
+  s_time_str[k] = 0;
+  return s_time_str;
+}
+
 __attribute__((used)) const char *unit_get_param_str_value(uint8_t id, int32_t value) {
+  if (id == kParamTime) {
+    if (const horizon::SyncDiv *d = horizon::timeParamDiv((int)value)) return d->name;
+    return formatMs(value < (int32_t)horizon::kMinTimeMs ? (int)horizon::kMinTimeMs : (int)value);
+  }
   if (id != kParamMode || value < 0 || value >= horizon::kNumModes) return nullptr;
 #ifdef HORIZON_LOADMETER
   int pct = (int)(s_load_show * 100.f + 0.5f);
@@ -198,5 +224,15 @@ __attribute__((used)) const char *unit_get_param_str_value(uint8_t id, int32_t v
 }
 
 __attribute__((used)) void unit_set_tempo(uint32_t tempo) {
-  (void)tempo;  // TIME is in ms for now (tempo sync is on the roadmap)
+  // 16.16 fixed-point BPM (as in Korg's examples)
+  const float bpm = (float)(tempo >> 16) + (float)(tempo & 0xFFFF) / 65536.f;
+  if (bpm < 1.f) return;
+  // Ignore tiny wobbles (e.g. external MIDI clock jitter) so synced delays
+  // don't keep gliding in pitch.
+  const float diff = bpm - s_bpm;
+  if (diff < 0.05f && diff > -0.05f) return;
+  s_bpm = bpm;
+  // Synced Time follows tempo changes (the delays glide, so no clicks).
+  if (horizon::timeParamIsSynced((int)s_params[kParamTime]))
+    s_engine.setTimeMs(horizon::timeParamToMs((int)s_params[kParamTime], s_bpm));
 }

@@ -38,6 +38,19 @@ So TIME tops out at **1250 ms** (a little headroom is kept for modulation and in
 Long "near-endless" tails come from feedback, not from line length, so this costs echo
 spacing, not decay length.
 
+**Tempo sync (v1.1.0).** No free param slot, so sync lives on the Time knob:
+`-13..-1` = divisions 1/32 … 1/2D (string-type param, like Korg's MorphEQ "Mid Fc"),
+`0..1250` = ms (unchanged from v1.0, so saved patches keep their times). Tempo comes from
+`unit_set_tempo()` (16.16 BPM); changes under 0.05 BPM are ignored so MIDI-clock jitter
+doesn't make the delays wobble. Divisions longer than the 1.25 s lines are halved until
+they fit (stays on the beat). The maths is in `core/horizon_sync.h` and tested in the
+harness.
+
+The input diffusers also delay the signal (~30 ms × the mode's diffuser scale), so in
+v1.0 every echo landed that much after the beat. Echo modes now blend the undiffused
+input back in by Density (`onBeat` in `horizon_modes.h`): a synced 1/4 at 174 bpm repeats
+at 344.9 ms (target 344.8). Reverb modes are unchanged (measured T60/attack identical).
+
 **Params.** 8 instead of the 10 planned. Merges:
 - MOD RATE + MOD DEPTH → one **Mod** knob (depth rises with the knob; rate rises gently
   with it, scaled per mode; depth is reduced at higher rates so it stays in tune).
